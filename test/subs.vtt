@@ -1,0 +1,8 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.000
+Native WebVTT subtitles
+should stay readable above the CRT.
+
+00:00:04.000 --> 00:00:08.000
+<i>Second cue</i> — the overlay re-renders them.

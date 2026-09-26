@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "RetroShader CRT",
+  "version": "1.0.0",
+  "description": "Watch web video through a real-time WebGL CRT shader: scanlines, phosphor mask, glow and analog colour.",
+  "minimum_chrome_version": "114",
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "action": {
+    "default_title": "RetroShader CRT",
+    "default_popup": "popup/popup.html",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" }
+  },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/settings.js", "src/shaders.js", "src/renderer.js", "src/content.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "commands": {
+    "toggle-crt": { "suggested_key": { "default": "Alt+Shift+C" }, "description": "Turn the CRT effect on/off" },
+    "next-preset": { "suggested_key": { "default": "Alt+Shift+P" }, "description": "Switch to the next preset" },
+    "toggle-compare": { "suggested_key": { "default": "Alt+Shift+X" }, "description": "Split-screen before/after compare" }
+  }
+}

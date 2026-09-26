@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RetroShader test harness</title>
+  <link rel="stylesheet" href="/extension/popup/popup.css">
+  <style>
+    body { margin: 0; }
+    .layout { display: flex; gap: 16px; padding: 14px; align-items: flex-start; }
+    .stage { flex: 1; min-width: 0; }
+    .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+    .bar select, .bar button { width: auto; }
+    .bar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+    /* A player shaped like YouTube's: video in a stacking-context container, controls as a later sibling. */
+    .player { position: relative; background: #000; overflow: hidden; }
+    .player:fullscreen { width: 100vw !important; height: 100vh !important; }
+    .video-container { position: relative; z-index: 10; width: 100%; height: 100%; }
+    .video-container video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+    .fake-controls { position: absolute; left: 0; right: 0; bottom: 0; z-index: 59; height: 40px; display: flex; align-items: center; gap: 12px;
+      padding: 0 14px; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.7)); font: 13px system-ui; pointer-events: auto; }
+    .fake-controls .track { flex: 1; height: 4px; background: rgba(255,255,255,.3); position: relative; }
+    .fake-controls .track i { position: absolute; left: 0; top: 0; bottom: 0; width: 35%; background: #f00; }
+    .caption { position: absolute; left: 50%; bottom: 56px; transform: translateX(-50%); z-index: 40; background: rgba(8,8,8,.75); color: #fff;
+      padding: 2px 8px; font: 18px system-ui; }
+    aside { flex: none; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+    #log { font: 11px ui-monospace, monospace; color: var(--muted); margin-top: 8px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <div class="stage">
+      <div class="bar">
+        <select id="mode">
+          <option value="240p">Test card: 240p pixel art (1280×960)</option>
+          <option value="480p">Test card: 480p TV (640×480)</option>
+          <option value="1080p">Test card: 1080p film (1920×1080, scope)</option>
+        </select>
+        <label class="check"><input type="file" id="file" accept="video/*"></label>
+        <span class="sep"></span>
+        <button data-size="480x270">480×270</button>
+        <button data-size="960x540">960×540</button>
+        <button data-size="1280x720">1280×720</button>
+        <button data-size="1440x1080">1440×1080</button>
+        <button id="fs">Fullscreen player</button>
+      </div>
+      <div id="player" class="player" style="width:960px;height:540px">
+        <div class="video-container"><video id="v" muted autoplay playsinline></video></div>
+        <div class="caption">Subtitles stay above the CRT layer</div>
+        <div class="fake-controls"><span>▶</span><div class="track"><i></i></div><span>1:23 / 4:56</span><span>⛶</span></div>
+      </div>
+      <div id="log"></div>
+    </div>
+    <aside><div id="app"></div></aside>
+  </div>
+
+  <script>window.__CRT_DEBUG__ = true;</script>
+  <script src="/test/chrome-stub.js"></script>
+  <script src="/test/testcard.js"></script>
+  <script src="/extension/src/settings.js"></script>
+  <script src="/extension/src/shaders.js"></script>
+  <script src="/extension/src/renderer.js"></script>
+  <script src="/extension/src/content.js"></script>
+  <script src="/extension/popup/popup.js"></script>
+  <script>
+    const v = document.getElementById('v');
+    const player = document.getElementById('player');
+    // Loop by hand: content.js ignores muted + loop + no-controls markup as a decorative background video.
+    v.addEventListener('ended', () => { v.currentTime = 0; v.play().catch(() => {}); });
+    let card = null;
+    function useCard(mode) {
+      if (card) card.stop();
+      card = TestCard.create(mode);
+      v.srcObject = card.stream;
+      v.play().catch(() => {});
+    }
+    document.getElementById('mode').addEventListener('change', e => useCard(e.target.value));
+    document.getElementById('file').addEventListener('change', e => {
+      const f = e.target.files[0]; if (!f) return;
+      if (card) { card.stop(); card = null; }
+      v.srcObject = null; v.src = URL.createObjectURL(f); v.play().catch(() => {});
+    });
+    for (const b of document.querySelectorAll('[data-size]')) {
+      b.addEventListener('click', () => { const [w, h] = b.dataset.size.split('x'); player.style.width = w + 'px'; player.style.height = h + 'px'; });
+    }
+    document.getElementById('fs').addEventListener('click', () => player.requestFullscreen());
+    const params = new URLSearchParams(location.search);
+    const m = params.get('mode') || '240p';
+    document.getElementById('mode').value = m;
+    if (params.get('size')) { const [w, h] = params.get('size').split('x'); player.style.width = w + 'px'; player.style.height = h + 'px'; }
+    if (params.get('src')) { v.src = params.get('src'); v.play().catch(() => {}); }   // e.g. ?src=/test/captures/card-240p.webm
+    else useCard(m);
+    window.crtStatus = () => chrome.tabs.sendMessage(1, { type: 'crt:status' });
+    // Save a crop of the CRT canvas at native device resolution (optionally magnified with nearest-neighbour).
+    // Region is in device pixels of the canvas. Returns the saved file path.
+    window.crtCapture = async (name, x = 0, y = 0, w = 0, h = 0, zoom = 1) => {
+      const o = window.__crt && window.__crt.overlay;
+      if (!o) return 'no overlay';
+      o.renderer.render();                       // draw + read back in the same task (no preserveDrawingBuffer)
+      const src = o.canvas;
+      w = w || src.width; h = h || src.height;
+      const c = document.createElement('canvas');
+      c.width = w * zoom; c.height = h * zoom;
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(src, x, y, w, h, 0, 0, w * zoom, h * zoom);
+      const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+      const res = await fetch('/__save?name=' + encodeURIComponent(name), { method: 'POST', body: blob });
+      return res.text();
+    };
+    // Record the live test card into a real video file (exercises the normal decoder + upload path).
+    window.recordCard = async (name, seconds = 8) => {
+      const rec = new MediaRecorder(card.stream, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 12e6 });
+      const parts = [];
+      rec.ondataavailable = e => parts.push(e.data);
+      const done = new Promise(r => rec.onstop = r);
+      rec.start(); await new Promise(r => setTimeout(r, seconds * 1000)); rec.stop(); await done;
+      const res = await fetch('/__save?name=' + encodeURIComponent(name), { method: 'POST', body: new Blob(parts, { type: 'video/webm' }) });
+      return res.text();
+    };
+    // Same for the raw video frame (for before/after comparisons).
+    window.rawCapture = async (name, x = 0, y = 0, w = 0, h = 0, zoom = 1) => {
+      const c = document.createElement('canvas');
+      w = w || v.videoWidth; h = h || v.videoHeight;
+      c.width = w * zoom; c.height = h * zoom;
+      const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(v, x, y, w, h, 0, 0, w * zoom, h * zoom);
+      const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+      return (await fetch('/__save?name=' + encodeURIComponent(name), { method: 'POST', body: blob })).text();
+    };
+  </script>
+</body>
+</html>
